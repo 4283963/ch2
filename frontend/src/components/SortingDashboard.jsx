@@ -23,6 +23,11 @@ const SortingDashboard = () => {
     qps: 0,
     queue: 0,
   });
+  const [antiWearEnabled, setAntiWearEnabled] = useState(false);
+  const antiWearRef = useRef({
+    enabled: false,
+    sorters: {},
+  });
 
   const conveyorConfig = {
     line1: {
@@ -116,22 +121,29 @@ const SortingDashboard = () => {
   };
 
   const drawSorter = (ctx, sorter) => {
-    const { x, lineY, color, warehouse, code, active, activeTimer } = sorter;
+    const { x, lineY, color, warehouse, code, active, activeTimer, id } = sorter;
+    const isHeld = antiWearRef.current.sorters[id]?.isHeld || false;
 
     const binY = lineY + 80;
     const binWidth = 70;
     const binHeight = 50;
 
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.2;
+    if (isHeld) {
+      const glowSize = 15 + Math.sin(Date.now() / 300) * 3;
+      ctx.shadowColor = '#22c55e';
+      ctx.shadowBlur = glowSize;
+    }
+
+    ctx.fillStyle = isHeld ? '#22c55e' : color;
+    ctx.globalAlpha = isHeld ? 0.3 : 0.2;
     ctx.fillRect(x - binWidth / 2, binY, binWidth, binHeight);
     ctx.globalAlpha = 1;
 
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isHeld ? '#22c55e' : color;
+    ctx.lineWidth = isHeld ? 3 : 2;
     ctx.strokeRect(x - binWidth / 2, binY, binWidth, binHeight);
 
-    ctx.fillStyle = color;
+    ctx.fillStyle = isHeld ? '#22c55e' : color;
     ctx.font = 'bold 12px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(warehouse, x, binY + 30);
@@ -145,17 +157,36 @@ const SortingDashboard = () => {
     ctx.fillStyle = '#475569';
     ctx.fillRect(x - 5, lineY - baffleHeight / 2 - 10, 10, 10);
 
-    if (active) {
-      const swingAngle = (activeTimer / 20) * Math.PI / 3;
+    ctx.shadowBlur = 0;
+
+    if (active || isHeld) {
+      let swingAngle;
+      if (isHeld && !active) {
+        swingAngle = Math.PI / 3;
+      } else {
+        swingAngle = Math.min((activeTimer / 20) * Math.PI / 3, Math.PI / 3);
+      }
       ctx.save();
       ctx.translate(x, lineY - baffleHeight / 2);
       ctx.rotate(swingAngle);
-      ctx.fillStyle = color;
+      ctx.fillStyle = isHeld ? '#22c55e' : color;
+      if (isHeld) {
+        ctx.shadowColor = '#22c55e';
+        ctx.shadowBlur = 10 + Math.sin(Date.now() / 200) * 5;
+      }
       ctx.fillRect(-3, 0, 6, baffleHeight);
+      ctx.shadowBlur = 0;
       ctx.restore();
     } else {
       ctx.fillStyle = '#64748b';
       ctx.fillRect(x - 3, lineY - baffleHeight / 2, 6, baffleHeight);
+    }
+
+    if (isHeld) {
+      ctx.fillStyle = '#22c55e';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('● 保持中', x, lineY - baffleHeight / 2 - 15);
     }
 
     ctx.fillStyle = '#94a3b8';
@@ -409,6 +440,19 @@ const SortingDashboard = () => {
     animationRef.current = requestAnimationFrame(gameLoop);
   }, [updatePackages, updateSorters, draw]);
 
+  const fetchAntiWearStatus = useCallback(() => {
+    fetch('/api/antiwear/status')
+      .then((res) => res.json())
+      .then((data) => {
+        antiWearRef.current.enabled = data.enabled || false;
+        antiWearRef.current.sorters = data.sorters || {};
+        setAntiWearEnabled(data.enabled || false);
+      })
+      .catch((err) => {
+        console.error('获取减磨状态失败:', err);
+      });
+  }, []);
+
   useEffect(() => {
     initSorters();
     gameLoop();
@@ -433,6 +477,7 @@ const SortingDashboard = () => {
         ws.onopen = () => {
           console.log('WebSocket 已连接');
           setWsConnected(true);
+          fetchAntiWearStatus();
         };
 
         ws.onmessage = (event) => {
@@ -455,6 +500,10 @@ const SortingDashboard = () => {
                 totalSuccess: data.data.totalSuccess,
                 totalFailed: data.data.totalFailed,
               });
+            } else if (data.type === 'ANTI_WEAR_STATUS' && data.data) {
+              antiWearRef.current.enabled = data.data.enabled || false;
+              antiWearRef.current.sorters = data.data.sorters || {};
+              setAntiWearEnabled(data.data.enabled || false);
             } else if (data.barcode) {
               addPackage(data);
             }
@@ -485,7 +534,7 @@ const SortingDashboard = () => {
         wsRef.current.close();
       }
     };
-  }, [addPackage]);
+  }, [addPackage, fetchAntiWearStatus]);
 
   const simulateScan = () => {
     const prefixes = ['BJ', 'SH', 'GZ', 'SZ', 'CD', 'WH', 'XA'];
@@ -550,6 +599,42 @@ const SortingDashboard = () => {
           setTimeout(() => simulateScan(), i * 10);
         }
       });
+  };
+
+  const toggleAntiWear = () => {
+    const newState = !antiWearEnabled;
+    const url = newState ? '/api/antiwear/enable' : '/api/antiwear/disable';
+    fetch(url, { method: 'POST' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          antiWearRef.current.enabled = data.data?.enabled ?? newState;
+          antiWearRef.current.sorters = data.data?.sorters || {};
+          setAntiWearEnabled(data.data?.enabled ?? newState);
+        }
+      })
+      .catch((err) => {
+        console.error('切换减磨模式失败:', err);
+      });
+  };
+
+  const stressTestSameDirection = (count, direction) => {
+    const prefix = direction || 'BJ';
+    for (let i = 0; i < count; i++) {
+      setTimeout(() => {
+        const barcode = prefix + Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+        fetch('/api/sorting/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            barcode,
+            scannerId: 'SCANNER-01',
+            conveyorLine: 1,
+            timestamp: Date.now(),
+          }),
+        });
+      }, i * 250);
+    }
   };
 
   return (
@@ -664,6 +749,28 @@ const SortingDashboard = () => {
           </div>
         </div>
 
+        <div className="antiwear-section">
+          <h4>减磨模式</h4>
+          <div className="antiwear-status">
+            <span className={`status-indicator ${antiWearEnabled ? 'status-antiwear-on' : 'status-antiwear-off'}`}>
+              ● {antiWearEnabled ? '已开启' : '已关闭'}
+            </span>
+          </div>
+          <div className="control-buttons">
+            <button
+              className={`btn ${antiWearEnabled ? 'btn-danger' : 'btn-success'}`}
+              onClick={toggleAntiWear}
+            >
+              {antiWearEnabled ? '关闭减磨模式' : '开启减磨模式'}
+            </button>
+          </div>
+          {antiWearEnabled && (
+            <p className="hint-text">
+              连续5个同方向包裹后，挡板保持开启
+            </p>
+          )}
+        </div>
+
         <div className="stress-test-section">
           <h4>压力测试</h4>
           <div className="control-buttons">
@@ -675,6 +782,18 @@ const SortingDashboard = () => {
             </button>
           </div>
           <p className="hint-text">注意：高压测试会产生大量包裹动画</p>
+
+          <div style={{ marginTop: '10px' }}>
+            <h5 style={{ color: '#94a3b8', fontSize: '12px', marginBottom: '8px' }}>同方向测试（减磨）</h5>
+            <div className="control-buttons">
+              <button className="btn btn-primary" onClick={() => stressTestSameDirection(10, 'BJ')} style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}>
+                北京仓×10
+              </button>
+              <button className="btn btn-primary" onClick={() => stressTestSameDirection(20, 'BJ')} style={{ backgroundColor: '#ef4444', borderColor: '#ef4444' }}>
+                北京仓×20
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="system-info">

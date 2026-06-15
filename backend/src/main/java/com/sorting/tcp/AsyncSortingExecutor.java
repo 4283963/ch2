@@ -6,6 +6,7 @@ import com.sorting.entity.SorterDevice;
 import com.sorting.entity.WarehouseRoute;
 import com.sorting.repository.PackageInfoRepository;
 import com.sorting.repository.SorterDeviceRepository;
+import com.sorting.service.AntiWearService;
 import com.sorting.service.RouteCacheService;
 import com.sorting.websocket.SortingWebSocketHandler;
 import jakarta.annotation.PostConstruct;
@@ -46,6 +47,9 @@ public class AsyncSortingExecutor {
 
     @Autowired
     private SortingWebSocketHandler webSocketHandler;
+
+    @Autowired
+    private AntiWearService antiWearService;
 
     private final Map<Integer, LinkedBlockingQueue<SortingTask>> sorterQueues = new ConcurrentHashMap<>();
     private final Map<Integer, AtomicLong> sorterLastActionTime = new ConcurrentHashMap<>();
@@ -195,6 +199,11 @@ public class AsyncSortingExecutor {
 
     private void executeSortingTask(Integer sorterId, SortingTask task) {
         try {
+            String warehouseCode = task.route.getWarehouseCode();
+            boolean skipSwing = antiWearService.shouldSkipSwing(sorterId, warehouseCode);
+
+            antiWearService.recordPackage(task.conveyorLine, sorterId, warehouseCode);
+
             AtomicLong lastAction = sorterLastActionTime.get(sorterId);
             long now = System.currentTimeMillis();
             long elapsed = now - lastAction.get();
@@ -203,12 +212,17 @@ public class AsyncSortingExecutor {
                 Thread.sleep(SORTER_MIN_INTERVAL_MS - elapsed);
             }
 
-            SorterDevice device = routeCacheService.getSorter(sorterId);
             boolean success;
-            if (device != null && device.getTcpHost() != null && device.getTcpPort() != null) {
-                success = tcpClient.sendSorterCommand(device.getTcpHost(), device.getTcpPort(), sorterId);
+            if (skipSwing) {
+                success = true;
+                log.debug("分拣机 {} 减磨模式保持中，跳过摆动 (包裹: {})", sorterId, task.barcode);
             } else {
-                success = tcpClient.sendSorterCommand(sorterId);
+                SorterDevice device = routeCacheService.getSorter(sorterId);
+                if (device != null && device.getTcpHost() != null && device.getTcpPort() != null) {
+                    success = tcpClient.sendSorterCommand(device.getTcpHost(), device.getTcpPort(), sorterId);
+                } else {
+                    success = tcpClient.sendSorterCommand(sorterId);
+                }
             }
 
             lastAction.set(System.currentTimeMillis());
@@ -224,13 +238,14 @@ public class AsyncSortingExecutor {
                 result.setDestinationWarehouse(task.route.getDestinationWarehouse());
                 result.setConveyorLine(task.conveyorLine);
                 result.setSuccess(true);
-                result.setMessage("分拣完成");
+                result.setMessage(skipSwing ? "减磨模式-保持开启" : "分拣完成");
                 result.setScanTime(task.scanTime);
                 result.setSortingTime(LocalDateTime.now());
 
                 webSocketHandler.broadcastSortingEvent(result);
 
-                PackageInfo pkg = buildPackageInfo(task.barcode, task.route, task.conveyorLine, "SORTED", true);
+                PackageInfo pkg = buildPackageInfo(task.barcode, task.route, task.conveyorLine,
+                        skipSwing ? "SORTED_HOLD" : "SORTED", true);
                 asyncSavePackageInfo(pkg);
                 asyncUpdateSorterStats(sorterId);
 

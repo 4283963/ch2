@@ -96,9 +96,19 @@
   background: linear-gradient(135deg, #dc2626, #b91c1c);
 }
 
+.btn-success {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: white;
+}
+
+.btn-success:hover {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+}
+
 .info-section,
 .legend-section,
 .monitor-section,
+.antiwear-section,
 .stress-test-section,
 .system-info {
   margin-bottom: 24px;
@@ -107,6 +117,7 @@
 .info-section h4,
 .legend-section h4,
 .monitor-section h4,
+.antiwear-section h4,
 .stress-test-section h4,
 .system-info h4 {
   color: #94a3b8;
@@ -154,6 +165,27 @@
 @keyframes pulse-alarm {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+.antiwear-status {
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.status-antiwear-on {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  animation: pulse-antiwear 2s infinite;
+}
+
+.status-antiwear-off {
+  background: rgba(100, 116, 139, 0.15);
+  color: #64748b;
+}
+
+@keyframes pulse-antiwear {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+  50% { box-shadow: 0 0 10px 4px rgba(34, 197, 94, 0.2); }
 }
 
 .monitor-section .info-item {
