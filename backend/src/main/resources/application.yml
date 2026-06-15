@@ -1,0 +1,28 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    active: h2
+  application:
+    name: sorting-control-system
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+sorting:
+  tcp:
+    enabled: false
+    host: 127.0.0.1
+    port: 9100
+    timeout: 3000
+  conveyor:
+    speed: 2.0
+    scanner-position: 0.5
+  websocket:
+    topic: /topic/sorting-status
