@@ -9,8 +9,20 @@ const SortingDashboard = () => {
   const statsRef = useRef({ scanned: 0, sorted: 0 });
   const [wsConnected, setWsConnected] = useState(false);
   const [stats, setStats] = useState({ scanned: 0, sorted: 0 });
+  const [monitorData, setMonitorData] = useState({
+    systemStatus: 'NORMAL',
+    currentQps: 0,
+    queueSize: 0,
+    avgLatency: 0,
+    maxLatency: 0,
+  });
   const wsRef = useRef(null);
   const packageIdRef = useRef(0);
+  const monitorRef = useRef({
+    systemStatus: 'NORMAL',
+    qps: 0,
+    queue: 0,
+  });
 
   const conveyorConfig = {
     line1: {
@@ -186,13 +198,42 @@ const SortingDashboard = () => {
     ctx.lineTo(width, statsBarY);
     ctx.stroke();
 
+    const status = monitorRef.current.systemStatus || 'NORMAL';
+    let statusColor = '#22c55e';
+    let statusText = '正常';
+    if (status === 'WARN') {
+      statusColor = '#f59e0b';
+      statusText = '警告';
+    } else if (status === 'ALARM') {
+      statusColor = '#ef4444';
+      statusText = '告警';
+    }
+
+    ctx.fillStyle = statusColor;
+    ctx.fillRect(0, 0, 5, statsBarY);
+
     ctx.fillStyle = '#f8fafc';
     ctx.font = 'bold 20px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText('分拣线联控系统', 30, 38);
+    ctx.fillText('分拣线联控系统', 20, 38);
+
+    ctx.fillStyle = statusColor;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(`● ${statusText}`, 200, 38);
+
+    if (monitorRef.current.qps > 0) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(`QPS: ${monitorRef.current.qps}`, 280, 38);
+    }
+    if (monitorRef.current.queue > 0) {
+      ctx.fillStyle = monitorRef.current.queue > 20 ? '#ef4444' : '#f59e0b';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(`队列: ${monitorRef.current.queue}`, 380, 38);
+    }
 
     const statsX = width - 300;
-    const statSpacing = 120;
+    const statSpacing = 100;
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = '12px sans-serif';
@@ -397,7 +438,24 @@ const SortingDashboard = () => {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.barcode) {
+            if (data.type === 'MONITOR' && data.data) {
+              monitorRef.current = {
+                systemStatus: data.data.status,
+                qps: data.data.qps,
+                queue: data.data.queueSize,
+              };
+              setMonitorData({
+                systemStatus: data.data.status,
+                currentQps: data.data.qps,
+                queueSize: data.data.queueSize,
+                avgLatency: data.data.avgLatency || 0,
+                maxLatency: data.data.maxLatency || 0,
+                dbQueueSize: data.data.dbQueueSize || 0,
+                totalProcessed: data.data.totalProcessed,
+                totalSuccess: data.data.totalSuccess,
+                totalFailed: data.data.totalFailed,
+              });
+            } else if (data.barcode) {
               addPackage(data);
             }
           } catch (e) {
@@ -459,6 +517,39 @@ const SortingDashboard = () => {
     for (let i = 0; i < 10; i++) {
       setTimeout(() => simulateScan(), i * 300);
     }
+  };
+
+  const stressTest = (count) => {
+    const prefixes = ['BJ', 'SH', 'GZ', 'SZ', 'CD', 'WH', 'XA'];
+    const batch = [];
+    for (let i = 0; i < count; i++) {
+      const randomPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+      const barcode = randomPrefix + Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+      batch.push({
+        barcode,
+        scannerId: 'STRESS-TEST',
+        conveyorLine: Math.random() > 0.5 ? 1 : 2,
+        timestamp: Date.now(),
+      });
+    }
+
+    fetch('/api/sorting/scan/batch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(batch),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        console.log('压力测试结果:', data);
+      })
+      .catch((err) => {
+        console.error('压力测试失败:', err);
+        for (let i = 0; i < count; i++) {
+          setTimeout(() => simulateScan(), i * 10);
+        }
+      });
   };
 
   return (
@@ -526,6 +617,64 @@ const SortingDashboard = () => {
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="monitor-section">
+          <h4>实时监控</h4>
+          <div className="monitor-status">
+            <span className={`status-indicator status-${monitorData.systemStatus.toLowerCase()}`}>
+              ● {monitorData.systemStatus === 'NORMAL' ? '正常' : monitorData.systemStatus === 'WARN' ? '警告' : '告警'}
+            </span>
+          </div>
+          <div className="info-grid">
+            <div className="info-item">
+              <span className="label">当前 QPS</span>
+              <span className="value">{monitorData.currentQps || 0}</span>
+            </div>
+            <div className="info-item">
+              <span className="label">指令队列</span>
+              <span className={`value ${(monitorData.queueSize || 0) > 20 ? 'text-danger' : ''}`}>
+                {monitorData.queueSize || 0}
+              </span>
+            </div>
+            <div className="info-item">
+              <span className="label">平均延迟</span>
+              <span className={`value ${(monitorData.avgLatency || 0) > 200 ? 'text-danger' : ''}`}>
+                {monitorData.avgLatency || 0}ms
+              </span>
+            </div>
+            <div className="info-item">
+              <span className="label">最大延迟</span>
+              <span className={`value ${(monitorData.maxLatency || 0) > 500 ? 'text-danger' : ''}`}>
+                {monitorData.maxLatency || 0}ms
+              </span>
+            </div>
+          </div>
+          <div className="info-item">
+            <span className="label">总计处理</span>
+            <span className="value">{monitorData.totalProcessed || 0}</span>
+          </div>
+          <div className="info-item">
+            <span className="label">成功/失败</span>
+            <span className="value">
+              <span className="text-success">{monitorData.totalSuccess || 0}</span>
+              {' / '}
+              <span className="text-danger">{monitorData.totalFailed || 0}</span>
+            </span>
+          </div>
+        </div>
+
+        <div className="stress-test-section">
+          <h4>压力测试</h4>
+          <div className="control-buttons">
+            <button className="btn btn-warning" onClick={() => stressTest(50)}>
+              压力测试 (50)
+            </button>
+            <button className="btn btn-danger" onClick={() => stressTest(200)}>
+              压力测试 (200)
+            </button>
+          </div>
+          <p className="hint-text">注意：高压测试会产生大量包裹动画</p>
         </div>
 
         <div className="system-info">
